@@ -56,8 +56,23 @@
         "Type": "Number",
         "Default": 1,
         "Description": "Desired number of task instances."
+      },
+      "ServiceLoadBalancer": {
+        "Type": "String",
+        "Default": "false",
+        "Description": "Create Service based Load Balancer."
       }
     },
+    "Conditions": {
+        "CreateLoadBalancer": {
+            "Fn::Equals": [
+                {
+                    "Ref": "ServiceLoadBalancer"
+                },
+                "true"
+            ]
+        },
+    },    
     "Resources": {
       "ECSServiceRole": {
         "Type": "AWS::IAM::Role",
@@ -131,6 +146,7 @@
         }
       },
       "ALBSecurityGroup": {
+        "Condition" : "CreateLoadBalancer",
         "Type": "AWS::EC2::SecurityGroup",
         "Properties": {
           "GroupDescription": "Allow inbound traffic to ALB",
@@ -190,6 +206,7 @@
       },
       "ApplicationLoadBalancer": {
         "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "Condition" : "CreateLoadBalancer",
         "Properties": {
           "Name": { "Ref": "LoadBalancerName" },
           "Subnets": { "Ref": "SubnetIds" },
@@ -237,6 +254,7 @@
       },
       "Listener": {
         "Type": "AWS::ElasticLoadBalancingV2::Listener",
+        "Condition" : "CreateLoadBalancer",
         "DependsOn" : "ApplicationLoadBalancer",
         "Properties": {
           "DefaultActions": [
