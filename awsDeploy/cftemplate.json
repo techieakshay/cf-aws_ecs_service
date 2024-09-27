@@ -1,0 +1,357 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Nginx Service inside cluster",
+    "Parameters": {
+      "ECSClusterName": {
+        "Type": "String",
+        "Description": "The name of the existing ECS Cluster.",
+        "Default" : "appecscluster"
+      },
+      "VpcId": {
+        "Type": "AWS::EC2::VPC::Id",
+        "Description": "The VPC ID where the ECS Cluster and ALB are deployed.",
+        "Default" : "vpc-026a3605217f29788"
+      },
+      "SubnetIds": {
+        "Type": "List<AWS::EC2::Subnet::Id>",
+        "Description": "The Subnet IDs where the ECS tasks and Load Balancer will be placed.",
+        "Default" : "subnet-063f5ebf040c9ac55,subnet-00b8ac669e7b8bc25,subnet-0e0ca2a7e889c65af,subnet-008dcb0952a81837f,subnet-07483cbd7bfbccec0"
+      },
+      "LoadBalancerName": {
+        "Type": "String",
+        "Default": "nginx-lb",
+        "Description": "The name of the Application Load Balancer."
+      },
+      "ListenerPort": {
+        "Type": "Number",
+        "Default": 80,
+        "Description": "The port on which the ALB will listen."
+      },
+      "TargetGroupName": {
+        "Type": "String",
+        "Default": "nginx-tg",
+        "Description": "The name of the Target Group."
+      },
+      "ContainerName": {
+        "Type": "String",
+        "Default": "nginx-container",
+        "Description": "The name of the container in the Task Definition."
+      },
+      "ContainerImage": {
+        "Type": "String",
+        "Default": "nginx:latest",
+        "Description": "Docker image for the container."
+      },
+      "ContainerPort": {
+        "Type": "Number",
+        "Default": 80,
+        "Description": "Port number on which the container listens."
+      },
+      "ServiceName": {
+        "Type": "String",
+        "Default": "nginx-service",
+        "Description": "Name of the ECS Service."
+      },
+      "DesiredCount": {
+        "Type": "Number",
+        "Default": 1,
+        "Description": "Desired number of task instances."
+      }
+    },
+    "Resources": {
+      "ECSServiceRole": {
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+          "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "Service": "ecs.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
+              }
+            ]
+          },
+          "Policies": [
+            {
+              "PolicyName": "ECSServicePolicy",
+              "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                      "elasticloadbalancing:DeregisterTargets",
+                      "elasticloadbalancing:RegisterTargets",
+                      "elasticloadbalancing:DescribeTargetGroups",
+                      "elasticloadbalancing:DescribeTargetHealth",
+                      "ecs:DescribeServices",
+                      "ecs:UpdateService",
+                      "cloudwatch:PutMetricData"
+                    ],
+                    "Resource": "*"
+                  }
+                ]
+              }
+            }
+          ],
+          "Path": "/"
+        }
+      },
+      "ECSTaskExecutionRole": {
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+          "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "Service": "ecs-tasks.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
+              }
+            ]
+          },
+          "ManagedPolicyArns": [
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+          ],
+          "Path": "/"
+        }
+      },
+      "ECSServiceRoleInstanceProfile": {
+        "Type": "AWS::IAM::InstanceProfile",
+        "Properties": {
+          "Path": "/",
+          "Roles": [
+            { "Ref": "ECSServiceRole" }
+          ]
+        }
+      },
+      "ALBSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Allow inbound traffic to ALB",
+          "VpcId": { "Ref": "VpcId" },
+          "SecurityGroupIngress": [
+            {
+              "IpProtocol": "tcp",
+              "FromPort": { "Ref": "ListenerPort" },
+              "ToPort": { "Ref": "ListenerPort" },
+              "CidrIp": "0.0.0.0/0"
+            }
+          ],
+          "SecurityGroupEgress": [
+            {
+              "IpProtocol": "-1",
+              "FromPort": 0,
+              "ToPort": 65535,
+              "CidrIp": "0.0.0.0/0"
+            }
+          ],
+          "Tags": [
+            {
+              "Key": "Name",
+              "Value": "ALB-SecurityGroup"
+            }
+          ]
+        }
+      },
+      "ECSSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Allow inbound traffic from ALB to ECS tasks",
+          "VpcId": { "Ref": "VpcId" },
+          "SecurityGroupIngress": [
+            {
+              "IpProtocol": "tcp",
+              "FromPort": { "Ref": "ContainerPort" },
+              "ToPort": { "Ref": "ContainerPort" },
+              "SourceSecurityGroupId": { "Ref": "ALBSecurityGroup" }
+            }
+          ],
+          "SecurityGroupEgress": [
+            {
+              "IpProtocol": "-1",
+              "FromPort": 0,
+              "ToPort": 65535,
+              "CidrIp": "0.0.0.0/0"
+            }
+          ],
+          "Tags": [
+            {
+              "Key": "Name",
+              "Value": "ECS-SecurityGroup"
+            }
+          ]
+        }
+      },
+      "ApplicationLoadBalancer": {
+        "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "Properties": {
+          "Name": { "Ref": "LoadBalancerName" },
+          "Subnets": { "Ref": "SubnetIds" },
+          "SecurityGroups": [
+            { "Ref": "ALBSecurityGroup" }
+          ],
+          "Scheme": "internet-facing",
+          "LoadBalancerAttributes": [
+            {
+              "Key": "access_logs.s3.enabled",
+              "Value": "false"
+            },
+            {
+              "Key": "idle_timeout.timeout_seconds",
+              "Value": "60"
+            }
+          ],
+          "Tags": [
+            {
+              "Key": "Name",
+              "Value": { "Ref": "LoadBalancerName" }
+            }
+          ]
+        }
+      },
+      "TargetGroup": {
+        "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+        "Properties": {
+          "Name": { "Ref": "TargetGroupName" },
+          "VpcId": { "Ref": "VpcId" },
+          "Protocol": "HTTP",
+          "Port": { "Ref": "ContainerPort" },
+          "HealthCheckProtocol": "HTTP",
+          "HealthCheckPort": "traffic-port",
+          "HealthCheckPath": "/",
+          "Matcher": {
+            "HttpCode": "200"
+          },
+          "TargetType": "ip",
+          "HealthCheckIntervalSeconds": 30,
+          "HealthCheckTimeoutSeconds": 5,
+          "HealthyThresholdCount": 5,
+          "UnhealthyThresholdCount": 2
+        }
+      },
+      "Listener": {
+        "Type": "AWS::ElasticLoadBalancingV2::Listener",
+        "DependsOn" : "ApplicationLoadBalancer",
+        "Properties": {
+          "DefaultActions": [
+            {
+              "Type": "forward",
+              "TargetGroupArn": { "Ref": "TargetGroup" }
+            }
+          ],
+          "LoadBalancerArn": { "Ref": "ApplicationLoadBalancer" },
+          "Port": { "Ref": "ListenerPort" },
+          "Protocol": "HTTP"
+        }
+      },
+      "LogGroup": {
+        "Type": "AWS::Logs::LogGroup",
+        "Properties": {
+          "LogGroupName":  { "Ref": "ServiceName" },
+          "RetentionInDays": 14
+        }
+      },
+      "ECSTaskDefinition": {
+        "Type": "AWS::ECS::TaskDefinition",
+        "Properties": {
+          "Family": { "Ref": "ServiceName" },
+          "NetworkMode": "awsvpc",
+          "RequiresCompatibilities": [
+            "EC2"
+          ],
+          "Cpu": "256",
+          "Memory": "512",
+          "ExecutionRoleArn": { "Ref": "ECSTaskExecutionRole" },
+          "ContainerDefinitions": [
+            {
+              "Name": { "Ref": "ContainerName" },
+              "Image": { "Ref": "ContainerImage" },
+              "Cpu": 256,
+              "Memory": 512,
+              "Essential": true,
+              "PortMappings": [
+                {
+                  "ContainerPort": { "Ref": "ContainerPort" },
+                  "HostPort": { "Ref": "ContainerPort" },
+                  "Protocol": "tcp"
+                }
+              ],
+              "LogConfiguration": {
+                "LogDriver": "awslogs",
+                "Options": {
+                  "awslogs-group": { "Ref": "LogGroup" },
+                  "awslogs-region": { "Ref": "AWS::Region" },
+                  "awslogs-stream-prefix": "ecs"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ECSService": {
+        "Type": "AWS::ECS::Service",
+        "DependsOn" : "Listener",
+        "Properties": {
+          "Cluster": { "Ref": "ECSClusterName" },
+          "DesiredCount": { "Ref": "DesiredCount" },
+          "LaunchType": "EC2",
+          "TaskDefinition": { "Ref": "ECSTaskDefinition" },
+          "LoadBalancers": [
+            {
+              "ContainerName": { "Ref": "ContainerName" },
+              "ContainerPort": { "Ref": "ContainerPort" },
+              "TargetGroupArn": { "Ref": "TargetGroup" }
+            }
+          ],
+          "NetworkConfiguration": {
+            "AwsvpcConfiguration": {
+              "AssignPublicIp": "DISABLED",
+              "Subnets": { "Ref": "SubnetIds" },
+              "SecurityGroups": [
+                { "Ref": "ECSSecurityGroup" }
+              ]
+            }
+          },
+          "ServiceName": { "Ref": "ServiceName" },
+          "DeploymentConfiguration": {
+            "MaximumPercent": 200,
+            "MinimumHealthyPercent": 100
+          }
+        }
+      }
+    },
+    "Outputs": {
+      "ECSServiceName": {
+        "Description": "Name of the ECS Service",
+        "Value": { "Ref": "ServiceName" }
+      },
+      "LoadBalancerDNSName": {
+        "Description": "DNS Name of the Application Load Balancer",
+        "Value": {
+          "Fn::GetAtt": [
+            "ApplicationLoadBalancer",
+            "DNSName"
+          ]
+        }
+      },
+      "TargetGroupArn": {
+        "Description": "ARN of the Target Group",
+        "Value": { "Ref": "TargetGroup" }
+      },
+      "ListenerArn": {
+        "Description": "ARN of the Listener",
+        "Value": { "Ref": "Listener" }
+      },
+      "LogGroupName": {
+        "Description": "Name of the CloudWatch Log Group",
+        "Value": { "Ref": "LogGroup" }
+      }
+    }
+  }
+  
